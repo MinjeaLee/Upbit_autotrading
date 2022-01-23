@@ -17,13 +17,10 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Keys
-load_dotenv()
+load_dotenv() # 환경 변수 호출 부분
 
 access_key = os.environ.get('access_key')
 secret_key = os.environ.get('secret_key')
-
-# access_key = 'oThHlCMqzxp8y0hxcg8U22AflDZhb76vn5Hx2coD'
-# secret_key = 'NHw5V9V9aXyFtEslIqL3urCQ4zqJcsDlf4avTmkP'
 server_url = 'https://api.upbit.com'
  
 # -----------------------------------------------------------------------------
@@ -959,6 +956,56 @@ def get_mfi(target_item, tick_kind, inq_range, loop_cnt):
             mfiList.append({"type": "MFI", "DT": dfDt[0], "MFI": round(mfi, 4)})
  
         return mfiList
+ 
+    # ----------------------------------------
+    # 모든 함수의 공통 부분(Exception 처리)
+    # ----------------------------------------
+    except Exception:
+        raise
+
+# -----------------------------------------------------------------------------
+# - Name : get_macd
+# - Desc : MACD 조회
+# - Input
+#   1) target_item : 대상 종목
+#   2) tick_kind : 캔들 종류 (1, 3, 5, 10, 15, 30, 60, 240 - 분, D-일, W-주, M-월)
+#   3) inq_range : 캔들 조회 범위
+#   4) loop_cnt : 지표 반복계산 횟수
+# - Output
+#   1) MACD 값
+# -----------------------------------------------------------------------------
+def get_macd(target_item, tick_kind, inq_range, loop_cnt):
+    try:
+ 
+        # 캔들 데이터 조회용
+        candle_datas = []
+ 
+        # MACD 데이터 리턴용
+        macd_list = []
+ 
+        # 캔들 추출
+        candle_data = get_candle(target_item, tick_kind, inq_range)
+ 
+        # 조회 횟수별 candle 데이터 조합
+        for i in range(0, int(loop_cnt)):
+            candle_datas.append(candle_data[i:int(len(candle_data))])
+ 
+        df = pd.DataFrame(candle_datas[0])
+        df = df.iloc[::-1]
+        df = df['trade_price']
+ 
+        # MACD 계산
+        exp1 = df.ewm(span=12, adjust=False).mean()
+        exp2 = df.ewm(span=26, adjust=False).mean()
+        macd = exp1 - exp2
+        exp3 = macd.ewm(span=9, adjust=False).mean()
+ 
+        for i in range(0, int(loop_cnt)):
+            macd_list.append(
+                {"type": "MACD", "DT": candle_datas[0][i]['candle_date_time_kst'], "MACD": round(macd[i], 4), "SIGNAL": round(exp3[i], 4),
+                 "OCL": round(macd[i] - exp3[i], 4)})
+ 
+        return macd_list
  
     # ----------------------------------------
     # 모든 함수의 공통 부분(Exception 처리)
