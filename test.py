@@ -62,10 +62,16 @@ if __name__ == '__main__':
         # rsi_data = upbit.get_rsi('KRW-DOGE', '30', '200')
         # logging.info(rsi_data)
 
-        mfi_data = upbit.get_mfi('KRW-DOGE', '30', '200', 10)
+        # mfi_data = upbit.get_mfi('KRW-DOGE', '30', '200', 10)
  
-        for mfi_data_for in mfi_data:
-            logging.info(mfi_data_for)
+        # for mfi_data_for in mfi_data:
+        #     logging.info(mfi_data_for)
+
+        # MACD 조회
+        macd_data = upbit.get_macd('KRW-BTC', '30', '200', 10)
+ 
+        for macd_data_for in macd_data:
+            logging.info(macd_data_for)
 
     except KeyboardInterrupt:
         logging.error("KeyboardInterrupt Exception 발생!")
