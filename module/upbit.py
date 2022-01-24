@@ -22,6 +22,9 @@ load_dotenv() # 환경 변수 호출 부분
 access_key = os.environ.get('access_key')
 secret_key = os.environ.get('secret_key')
 server_url = 'https://api.upbit.com'
+
+# 최소 주문 금액
+min_order_amt = 5000
  
 # -----------------------------------------------------------------------------
 # - Name : set_loglevel
@@ -89,7 +92,7 @@ def send_request(reqType, reqUrl, reqParam, reqHeader):
     try:
  
         # 요청 가능회수 확보를 위해 기다리는 시간(초)
-        err_sleep_time = 1
+        err_sleep_time = 1 #! 1 --> 0.3
  
         # 요청에 대한 응답을 받을 때까지 반복 수행
         while True:
@@ -110,7 +113,7 @@ def send_request(reqType, reqUrl, reqParam, reqHeader):
                 break
  
             # 요청 가능회수가 4개 미만이면 요청 가능회수 확보를 위해 일정시간 대기
-            if int(remain_sec) < 4:
+            if int(remain_sec) < 4:     #! 4 --> 3
                 logging.debug("요청 가능회수 한도 도달! 남은횟수:" + str(remain_sec))
                 time.sleep(err_sleep_time)
  
@@ -309,8 +312,14 @@ def get_balance(target_item):
 #   1) rtn_data : 매도결과
 # -----------------------------------------------------------------------------
 # 시장가 매도
-def sellcoin_mp(target_item):
+def sellcoin_mp(target_item, cancel_yn): #todo 제외 종목도 매수 되는지 확인
+    
     try:
+
+        if cancel_yn == 'Y' or cancel_yn == 'y':  #! 이부분 없었는데 생김   
+            # 기존 주문 존재시 취소
+            cancel_order(target_item, "SELL")
+       
  
         # 잔고 조회
         cur_balance = get_balance(target_item)
@@ -365,12 +374,12 @@ def sellcoin_mp(target_item):
 # - Output
 #   1) rtn_data : 매도결과
 # -----------------------------------------------------------------------------
-def sellcoin_tg(target_item, sell_price):
+def sellcoin_tg(target_item, sell_price):        #todo sellcoin_mp와 마찬가지로 제외 종목도 매수되는지 확인 
     try:
  
         # 잔고 조회
         cur_balance = get_balance(target_item)
- 
+
         query = {
             'market': target_item,
             'side': 'ask',
@@ -379,7 +388,7 @@ def sellcoin_tg(target_item, sell_price):
             'ord_type': 'limit',
         }
  
-        query_string = urlencode(query).encode()    # 전량 매도
+        query_string = urlencode(query).encode()    #? 전량 매도 
  
         m = hashlib.sha512()
         m.update(query_string)
@@ -864,42 +873,47 @@ def get_candle(target_item, tick_kind, inq_range):
     except Exception:
         raise
 
-def get_rsi(target_item, tick_kind, inq_range):
+def get_rsi(candle_datas):
     try:
  
-        # 캔들 추출
-        candle_data = get_candle(target_item, tick_kind, inq_range)
+        # RSI 데이터 리턴용
+        rsi_data = []
  
-        df = pd.DataFrame(candle_data)
-        df = df.reindex(index=df.index[::-1]).reset_index()
+        # 캔들 데이터만큼 수행
+        for candle_data_for in candle_datas:
  
-        df['close'] = df["trade_price"]
+            df = pd.DataFrame(candle_data_for)
+            dfDt = df['candle_date_time_kst'].iloc[::-1]
+            df = df.reindex(index=df.index[::-1]).reset_index()
  
-        # RSI 계산
-        def rsi(ohlc: pd.DataFrame, period: int = 14):
-            ohlc["close"] = ohlc["close"]
-            delta = ohlc["close"].diff()
+            df['close'] = df["trade_price"]
  
-            up, down = delta.copy(), delta.copy()
-            up[up < 0] = 0
-            down[down > 0] = 0
+            # RSI 계산
+            def rsi(ohlc: pd.DataFrame, period: int = 14):
+                ohlc["close"] = ohlc["close"]
+                delta = ohlc["close"].diff()
  
-            _gain = up.ewm(com=(period - 1), min_periods=period).mean()
-            _loss = down.abs().ewm(com=(period - 1), min_periods=period).mean()
+                up, down = delta.copy(), delta.copy()
+                up[up < 0] = 0
+                down[down > 0] = 0
  
-            RS = _gain / _loss
-            return pd.Series(100 - (100 / (1 + RS)), name="RSI")
+                _gain = up.ewm(com=(period - 1), min_periods=period).mean()
+                _loss = down.abs().ewm(com=(period - 1), min_periods=period).mean()
  
-        rsi = round(rsi(df, 14).iloc[-1], 4)
+                RS = _gain / _loss
+                return pd.Series(100 - (100 / (1 + RS)), name="RSI")
  
-        return rsi
+            rsi = round(rsi(df, 14).iloc[-1], 4)
+            rsi_data.append({"type": "RSI", "DT": dfDt[0], "RSI": rsi})
  
+        return rsi_data
  
     # ----------------------------------------
     # 모든 함수의 공통 부분(Exception 처리)
     # ----------------------------------------
     except Exception:
         raise
+ 
 
 
 # -----------------------------------------------------------------------------
@@ -967,28 +981,16 @@ def get_mfi(target_item, tick_kind, inq_range, loop_cnt):
 # - Name : get_macd
 # - Desc : MACD 조회
 # - Input
-#   1) target_item : 대상 종목
-#   2) tick_kind : 캔들 종류 (1, 3, 5, 10, 15, 30, 60, 240 - 분, D-일, W-주, M-월)
-#   3) inq_range : 캔들 조회 범위
-#   4) loop_cnt : 지표 반복계산 횟수
+#   1) candle_datas : 캔들 정보
+#   2) loop_cnt : 반복 횟수
 # - Output
 #   1) MACD 값
 # -----------------------------------------------------------------------------
-def get_macd(target_item, tick_kind, inq_range, loop_cnt):
+def get_macd(candle_datas, loop_cnt):
     try:
- 
-        # 캔들 데이터 조회용
-        candle_datas = []
  
         # MACD 데이터 리턴용
         macd_list = []
- 
-        # 캔들 추출
-        candle_data = get_candle(target_item, tick_kind, inq_range)
- 
-        # 조회 횟수별 candle 데이터 조합
-        for i in range(0, int(loop_cnt)):
-            candle_datas.append(candle_data[i:int(len(candle_data))])
  
         df = pd.DataFrame(candle_datas[0])
         df = df.iloc[::-1]
@@ -1002,7 +1004,8 @@ def get_macd(target_item, tick_kind, inq_range, loop_cnt):
  
         for i in range(0, int(loop_cnt)):
             macd_list.append(
-                {"type": "MACD", "DT": candle_datas[0][i]['candle_date_time_kst'], "MACD": round(macd[i], 4), "SIGNAL": round(exp3[i], 4),
+                {"type": "MACD", "DT": candle_datas[0][i]['candle_date_time_kst'], "MACD": round(macd[i], 4),
+                 "SIGNAL": round(exp3[i], 4),
                  "OCL": round(macd[i] - exp3[i], 4)})
  
         return macd_list
@@ -1012,33 +1015,20 @@ def get_macd(target_item, tick_kind, inq_range, loop_cnt):
     # ----------------------------------------
     except Exception:
         raise
-
+ 
 # -----------------------------------------------------------------------------
 # - Name : get_bb
 # - Desc : 볼린저밴드 조회
 # - Input
-#   1) target_item : 대상 종목
-#   2) tick_kind : 캔들 종류 (1, 3, 5, 10, 15, 30, 60, 240 - 분, D-일, W-주, M-월)
-#   3) inq_range : 캔들 조회 범위
-#   4) loop_cnt : 지표 반복계산 횟수
+#   1) candle_datas : 캔들 정보
 # - Output
 #   1) 볼린저 밴드 값
 # -----------------------------------------------------------------------------
-def get_bb(target_item, tick_kind, inq_range, loop_cnt):
+def get_bb(candle_datas):
     try:
- 
-        # 캔들 데이터 조회용
-        candle_datas = []
  
         # 볼린저밴드 데이터 리턴용
         bb_list = []
- 
-        # 캔들 추출
-        candle_data = get_candle(target_item, tick_kind, inq_range)
- 
-        # 조회 횟수별 candle 데이터 조합
-        for i in range(0, int(loop_cnt)):
-            candle_datas.append(candle_data[i:int(len(candle_data))])
  
         # 캔들 데이터만큼 수행
         for candle_data_for in candle_datas:
@@ -1047,7 +1037,7 @@ def get_bb(target_item, tick_kind, inq_range, loop_cnt):
             df = df['trade_price'].iloc[::-1]
  
             # 표준편차(곱)
-            unit = 2
+            unit = 2 # ! 블린저 밴드 표준편차
  
             band1 = unit * numpy.std(df[len(df) - 20:len(df)])
             bb_center = numpy.mean(df[len(df) - 20:len(df)])
@@ -1055,7 +1045,7 @@ def get_bb(target_item, tick_kind, inq_range, loop_cnt):
             band_low = bb_center - band1
  
             bb_list.append({"type": "BB", "DT": dfDt[0], "BBH": round(band_high, 4), "BBM": round(bb_center, 4),
-                           "BBL": round(band_low, 4)})
+                            "BBL": round(band_low, 4)})
  
         return bb_list
  
@@ -1066,6 +1056,46 @@ def get_bb(target_item, tick_kind, inq_range, loop_cnt):
     except Exception:
         raise
 
+# -----------------------------------------------------------------------------
+# - Name : get_williams
+# - Desc : 윌리암스 %R 조회
+# - Input
+#   1) candle_datas : 캔들 정보
+# - Output
+#   1) 윌리암스 %R 값
+# -----------------------------------------------------------------------------
+def get_williams(candle_datas):
+    try:
+ 
+        # 윌리암스R 데이터 리턴용
+        williams_list = []
+ 
+        # 캔들 데이터만큼 수행
+        for candle_data_for in candle_datas:
+            df = pd.DataFrame(candle_data_for)
+            dfDt = df['candle_date_time_kst'].iloc[::-1]
+            df = df.iloc[:14]
+ 
+            # 계산식
+            # %R = (Highest High - Close)/(Highest High - Lowest Low) * -100
+            hh = numpy.max(df['high_price'])
+            ll = numpy.min(df['low_price'])
+            cp = df['trade_price'][0]
+ 
+            w = (hh - cp) / (hh - ll) * -100
+ 
+            williams_list.append(
+                {"type": "WILLIAMS", "DT": dfDt[0], "HH": round(hh, 4), "LL": round(ll, 4), "CP": round(cp, 4),
+                 "W": round(w, 4)})
+ 
+        return williams_list
+ 
+ 
+    # ----------------------------------------
+    # 모든 함수의 공통 부분(Exception 처리)
+    # ----------------------------------------
+    except Exception:
+        raise
 
 # -----------------------------------------------------------------------------
 # - Name : get_indicators
@@ -1092,10 +1122,13 @@ def get_indicators(target_item, tick_kind, inq_range, loop_cnt):
  
         # 캔들 추출
         candle_data = get_candle(target_item, tick_kind, inq_range)
+
+        if len(candle_data) >= 30: 
+            # 조회 횟수별 candle 데이터 조합
+            for i in range(0, int(loop_cnt)):
+                candle_datas.append(candle_data[i:int(len(candle_data))])
+
  
-        # 조회 횟수별 candle 데이터 조합
-        for i in range(0, int(loop_cnt)):
-            candle_datas.append(candle_data[i:int(len(candle_data))])
  
         # RSI 정보 조회
         rsi_data = get_rsi(candle_datas)
@@ -1108,6 +1141,8 @@ def get_indicators(target_item, tick_kind, inq_range, loop_cnt):
  
         # BB 정보 조회
         bb_data = get_bb(candle_datas)
+
+        williams_data = get_williams(candle_datas)
  
         if len(rsi_data) > 0:
             indicator_data.append(rsi_data)
@@ -1120,6 +1155,9 @@ def get_indicators(target_item, tick_kind, inq_range, loop_cnt):
  
         if len(bb_data) > 0:
             indicator_data.append(bb_data)
+
+        if len(williams_data) > 0:
+            indicator_data.append(williams_data)
  
         return indicator_data
  
@@ -1131,8 +1169,114 @@ def get_indicators(target_item, tick_kind, inq_range, loop_cnt):
 
 
        
+
+
+# ! 아래 함수들 안 쓰이는 것 같음
+# ! 
+
 # -----------------------------------------------------------------------------
-# - Name : get_williams
+# - Name : chg_account_to_comma
+# - Desc : 잔고 종목 리스트를 콤마리스트로 변경
+# - Input
+#   1) account_data : 잔고 데이터
+# - Output
+#   1) 종목 리스트(콤마 구분자)
+# -----------------------------------------------------------------------------
+def chg_account_to_comma(account_data):
+    # ? 이 함수는 왜 있는 거지 --> 안 쓰이는 것 같은데
+    # todo 언제 쓰이는 지 찾을 것
+    try:
+ 
+        rtn_data = ""
+ 
+        for account_data_for in account_data:
+ 
+            if rtn_data == '':
+                rtn_data = rtn_data + account_data_for['market']
+            else:
+                rtn_data = rtn_data + ',' + account_data_for['market']
+ 
+        return rtn_data
+ 
+    # ----------------------------------------
+    # Exception Raise
+    # ----------------------------------------
+    except Exception:
+        raise
+ 
+
+def get_ticker(target_itemlist):
+    #? 이 함수도 언제 쓰는 거지
+    # todo 언제 쓰는지 찾기
+    try:
+ 
+        url = "https://api.upbit.com/v1/ticker"
+ 
+        querystring = {"markets": target_itemlist}
+        response = send_request("GET", url, querystring, "")
+        rtn_data = response.json()
+ 
+        return rtn_data
+ 
+    # ----------------------------------------
+    # 모든 함수의 공통 부분(Exception 처리)
+    # ----------------------------------------
+    except Exception:
+        raise
+ 
+
+
+
+#! 아래 함수들은 바뀐 것 같다
+# -----------------------------------------------------------------------------
+# - Name : get_rsi
+# - Desc : RSI 조회
+# - Input
+#   1) target_item : 대상 종목
+#   2) tick_kind : 캔들 종류 (1, 3, 5, 10, 15, 30, 60, 240 - 분, D-일, W-주, M-월)
+#   3) inq_range : 조회 범위
+# - Output
+#   1) RSI 값
+# -----------------------------------------------------------------------------
+# def get_rsi(target_item, tick_kind, inq_range): 
+#     try:
+ 
+#         # 캔들 추출
+#         candle_data = get_candle(target_item, tick_kind, inq_range)
+ 
+#         df = pd.DataFrame(candle_data)
+#         df = df.reindex(index=df.index[::-1]).reset_index()
+ 
+#         df['close'] = df["trade_price"]
+ 
+#         # RSI 계산
+#         def rsi(ohlc: pd.DataFrame, period: int = 14):
+#             ohlc["close"] = ohlc["close"]
+#             delta = ohlc["close"].diff()
+ 
+#             up, down = delta.copy(), delta.copy()
+#             up[up < 0] = 0
+#             down[down > 0] = 0
+ 
+#             _gain = up.ewm(com=(period - 1), min_periods=period).mean()
+#             _loss = down.abs().ewm(com=(period - 1), min_periods=period).mean()
+ 
+#             RS = _gain / _loss
+#             return pd.Series(100 - (100 / (1 + RS)), name="RSI")
+ 
+#         rsi = round(rsi(df, 14).iloc[-1], 4)
+ 
+#         return rsi
+ 
+ 
+#     # ----------------------------------------
+#     # 모든 함수의 공통 부분(Exception 처리)
+#     # ----------------------------------------
+#     except Exception:
+#         raise
+
+# -----------------------------------------------------------------------------
+# - Name : get_williamsR
 # - Desc : 윌리암스 %R 조회
 # - Input
 #   1) target_item : 대상 종목
@@ -1142,44 +1286,148 @@ def get_indicators(target_item, tick_kind, inq_range, loop_cnt):
 # - Output
 #   1) 윌리암스 %R 값
 # -----------------------------------------------------------------------------
-def get_williamsR(target_item, tick_kind, inq_range, loop_cnt):
-    try:
+# def get_williamsR(target_item, tick_kind, inq_range, loop_cnt):
+#     try:
  
-        # 캔들 데이터 조회용
-        candle_datas = []
+#         # 캔들 데이터 조회용
+#         candle_datas = []
  
-        # 윌리암스R 데이터 리턴용
-        williams_list = []
+#         # 윌리암스R 데이터 리턴용
+#         williams_list = []
  
-        # 캔들 추출
-        candle_data = get_candle(target_item, tick_kind, inq_range)
+#         # 캔들 추출
+#         candle_data = get_candle(target_item, tick_kind, inq_range)
  
-        # 조회 횟수별 candle 데이터 조합
-        for i in range(0, int(loop_cnt)):
-            candle_datas.append(candle_data[i:int(len(candle_data))])
+#         # 조회 횟수별 candle 데이터 조합
+#         for i in range(0, int(loop_cnt)):
+#             candle_datas.append(candle_data[i:int(len(candle_data))])
  
-        # 캔들 데이터만큼 수행
-        for candle_data_for in candle_datas:
+#         # 캔들 데이터만큼 수행
+#         for candle_data_for in candle_datas:
  
-            df = pd.DataFrame(candle_data_for)
-            dfDt = df['candle_date_time_kst'].iloc[::-1]
-            df = df.iloc[:14]
+#             df = pd.DataFrame(candle_data_for)
+#             dfDt = df['candle_date_time_kst'].iloc[::-1]
+#             df = df.iloc[:14]
  
-            # 계산식
-            # %R = (Highest High - Close)/(Highest High - Lowest Low) * -100
-            hh = numpy.max(df['high_price'])
-            ll = numpy.min(df['low_price'])
-            cp = df['trade_price'][0]
+#             # 계산식
+#             # %R = (Highest High - Close)/(Highest High - Lowest Low) * -100
+#             hh = numpy.max(df['high_price'])
+#             ll = numpy.min(df['low_price'])
+#             cp = df['trade_price'][0]
  
-            w = (hh - cp)/(hh - ll) * -100
+#             w = (hh - cp)/(hh - ll) * -100
  
-            williams_list.append({"type": "WILLIAMS", "DT": dfDt[0], "HH": round(hh, 4), "LL": round(ll, 4), "CP": round(cp, 4), "W": round(w, 4)})
+#             williams_list.append({"type": "WILLIAMS", "DT": dfDt[0], "HH": round(hh, 4), "LL": round(ll, 4), "CP": round(cp, 4), "W": round(w, 4)})
  
-        return williams_list
+#         return williams_list
  
  
-    # ----------------------------------------
-    # 모든 함수의 공통 부분(Exception 처리)
-    # ----------------------------------------
-    except Exception:
-        raise
+#     # ----------------------------------------
+#     # 모든 함수의 공통 부분(Exception 처리)
+#     # ----------------------------------------
+#     except Exception:
+#         raise
+
+# -----------------------------------------------------------------------------
+# - Name : get_bb
+# - Desc : 볼린저밴드 조회
+# - Input
+#   1) target_item : 대상 종목
+#   2) tick_kind : 캔들 종류 (1, 3, 5, 10, 15, 30, 60, 240 - 분, D-일, W-주, M-월)
+#   3) inq_range : 캔들 조회 범위
+#   4) loop_cnt : 지표 반복계산 횟수
+# - Output
+#   1) 볼린저 밴드 값
+# -----------------------------------------------------------------------------
+# def get_bb(target_item, tick_kind, inq_range, loop_cnt):
+#     try:
+ 
+#         # 캔들 데이터 조회용
+#         candle_datas = []
+ 
+#         # 볼린저밴드 데이터 리턴용
+#         bb_list = []
+ 
+#         # 캔들 추출
+#         candle_data = get_candle(target_item, tick_kind, inq_range)
+ 
+#         # 조회 횟수별 candle 데이터 조합
+#         for i in range(0, int(loop_cnt)):
+#             candle_datas.append(candle_data[i:int(len(candle_data))])
+ 
+#         # 캔들 데이터만큼 수행
+#         for candle_data_for in candle_datas:
+#             df = pd.DataFrame(candle_data_for)
+#             dfDt = df['candle_date_time_kst'].iloc[::-1]
+#             df = df['trade_price'].iloc[::-1]
+ 
+#             # 표준편차(곱)
+#             unit = 2 
+ 
+#             band1 = unit * numpy.std(df[len(df) - 20:len(df)])
+#             bb_center = numpy.mean(df[len(df) - 20:len(df)])
+#             band_high = bb_center + band1
+#             band_low = bb_center - band1
+ 
+#             bb_list.append({"type": "BB", "DT": dfDt[0], "BBH": round(band_high, 4), "BBM": round(bb_center, 4),
+#                            "BBL": round(band_low, 4)})
+ 
+#         return bb_list
+ 
+ 
+#     # ----------------------------------------
+#     # 모든 함수의 공통 부분(Exception 처리)
+#     # ----------------------------------------
+#     except Exception:
+#         raise
+
+# -----------------------------------------------------------------------------
+# - Name : get_macd
+# - Desc : MACD 조회
+# - Input
+#   1) target_item : 대상 종목
+#   2) tick_kind : 캔들 종류 (1, 3, 5, 10, 15, 30, 60, 240 - 분, D-일, W-주, M-월)
+#   3) inq_range : 캔들 조회 범위
+#   4) loop_cnt : 지표 반복계산 횟수
+# - Output
+#   1) MACD 값
+# # -----------------------------------------------------------------------------
+# def get_macd(target_item, tick_kind, inq_range, loop_cnt):
+#     try:
+ 
+#         # 캔들 데이터 조회용
+#         candle_datas = []
+ 
+#         # MACD 데이터 리턴용
+#         macd_list = []
+ 
+#         # 캔들 추출
+#         candle_data = get_candle(target_item, tick_kind, inq_range)
+ 
+#         # 조회 횟수별 candle 데이터 조합
+#         for i in range(0, int(loop_cnt)):
+#             candle_datas.append(candle_data[i:int(len(candle_data))])
+ 
+#         df = pd.DataFrame(candle_datas[0])
+#         df = df.iloc[::-1]
+#         df = df['trade_price']
+ 
+#         # MACD 계산
+#         exp1 = df.ewm(span=12, adjust=False).mean()
+#         exp2 = df.ewm(span=26, adjust=False).mean()
+#         macd = exp1 - exp2
+#         exp3 = macd.ewm(span=9, adjust=False).mean()
+ 
+#         for i in range(0, int(loop_cnt)):
+#             macd_list.append(
+#                 {"type": "MACD", "DT": candle_datas[0][i]['candle_date_time_kst'], "MACD": round(macd[i], 4), "SIGNAL": round(exp3[i], 4),
+#                  "OCL": round(macd[i] - exp3[i], 4)})
+ 
+#         return macd_list
+ 
+#     # ----------------------------------------
+#     # 모든 함수의 공통 부분(Exception 처리)
+#     # ----------------------------------------
+#     except Exception:
+#         raise
+
