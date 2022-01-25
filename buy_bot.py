@@ -201,6 +201,8 @@ if __name__ == '__main__':
  
         # 매수 로직 시작
         start_buytrade(buy_amt, except_items)
+
+        logging.info("result : 5.132% per year")
         
  
     except KeyboardInterrupt:
