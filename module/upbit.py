@@ -619,6 +619,9 @@ def get_accounts(except_yn, market_code):
  
         rtn_data = []
  
+        # 해당 마켓에 존재하는 종목 리스트만 추출
+        market_item_list = get_items(market_code, '')
+ 
         # 소액 제외 기준
         min_price = 5000
  
@@ -634,28 +637,30 @@ def get_accounts(except_yn, market_code):
         res = send_request("GET", server_url + "/v1/accounts", "", headers)
         account_data = res.json()
  
-        for account_data_for in account_data:
- 
-            # KRW 및 소액 제외
-            if except_yn == "Y" or except_yn == "y":
-                if account_data_for['currency'] != "KRW" and Decimal(str(account_data_for['avg_buy_price'])) * (Decimal(str(account_data_for['balance'])) + Decimal(str(account_data_for['locked']))) >= Decimal(str(min_price)):
-                    rtn_data.append(
-                        {'market': market_code + '-' + account_data_for['currency'], 'balance': account_data_for['balance'],
-                         'locked': account_data_for['locked'],
-                         'avg_buy_price': account_data_for['avg_buy_price'],
-                         'avg_buy_price_modified': account_data_for['avg_buy_price_modified']})
-            else:
-                if account_data_for['currency'] != "KRW":
-
-                    rtn_data.append(
-                        {
-                            'market': market_code + '-' + account_data_for['currency'], 
-                            'balance': account_data_for['balance'],
-                            'locked': account_data_for['locked'],
-                            'avg_buy_price': account_data_for['avg_buy_price'],
-                            'avg_buy_price_modified': account_data_for['avg_buy_price_modified']
-                        }
-                    )
+        for account_data_for in account_data:            
+            for market_item_list_for in market_item_list:
+                
+                # 해당 마켓에 있는 종목만 조합
+                if market_code + '-' + account_data_for['currency'] == market_item_list_for['market']:
+                    
+                    # KRW 및 소액 제외
+                    if except_yn == "Y" or except_yn == "y":
+                        if account_data_for['currency'] != "KRW" and Decimal(str(account_data_for['avg_buy_price'])) * (
+                                Decimal(str(account_data_for['balance'])) + Decimal(
+                                str(account_data_for['locked']))) >= Decimal(str(min_price)):
+                            rtn_data.append(
+                                {'market': market_code + '-' + account_data_for['currency'],
+                                 'balance': account_data_for['balance'],
+                                 'locked': account_data_for['locked'],
+                                 'avg_buy_price': account_data_for['avg_buy_price'],
+                                 'avg_buy_price_modified': account_data_for['avg_buy_price_modified']})
+                    else:
+                        if account_data_for['currency'] != "KRW":
+                            rtn_data.append(
+                            {'market': market_code + '-' + account_data_for['currency'], 'balance': account_data_for['balance'],
+                             'locked': account_data_for['locked'],
+                             'avg_buy_price': account_data_for['avg_buy_price'],
+                             'avg_buy_price_modified': account_data_for['avg_buy_price_modified']})
  
         return rtn_data
  
@@ -665,70 +670,7 @@ def get_accounts(except_yn, market_code):
     except Exception:
         raise
 
-# -----------------------------------------------------------------------------
-# - Name : get_krwbal
-# - Desc : KRW 잔고 조회
-# - Input
-# - Output
-#   1) KRW 잔고 Dictionary
-#     1. krw_balance : KRW 잔고
-#     2. fee : 수수료
-#     3. available_krw : 매수가능 KRW잔고(수수료를 고려한 금액)
-# -----------------------------------------------------------------------------
-def get_krwbal():
-    try:
- 
-        # 잔고 리턴용
-        rtn_balance = {}
- 
-        # 수수료 0.05%(업비트 기준)
-        fee_rate = 0.05
- 
-        payload = {
-            'access_key': access_key,
-            'nonce': str(uuid.uuid4()),
-        }
- 
-        jwt_token = jwt.encode(payload, secret_key)
-        authorize_token = 'Bearer {}'.format(jwt_token)
-        headers = {"Authorization": authorize_token}
- 
-        res = send_request("GET", server_url + "/v1/accounts", "", headers)
- 
-        data = res.json()
- 
-        for dataFor in data:
-            if (dataFor['currency']) == "KRW":
-                krw_balance = math.floor(Decimal(str(dataFor['balance'])))
- 
-        # 잔고가 있는 경우만
-        if Decimal(str(krw_balance)) > Decimal(str(0)):
-            # 수수료
-            fee = math.ceil(Decimal(str(krw_balance)) * (Decimal(str(fee_rate)) / Decimal(str(100))))
- 
-            # 매수가능금액
-            available_krw = math.floor(Decimal(str(krw_balance)) - Decimal(str(fee)))
- 
-        else:
-            # 수수료
-            fee = 0
- 
-            # 매수가능금액
-            available_krw = 0
- 
-        # 결과 조립
-        rtn_balance['krw_balance'] = krw_balance
-        rtn_balance['fee'] = fee
-        rtn_balance['available_krw'] = available_krw
- 
-        return rtn_balance
- 
-    # ----------------------------------------
-    # Exception Raise
-    # ----------------------------------------
-    except Exception:
-        raise
-
+    
 # -----------------------------------------------------------------------------
 # - Name : get_order
 # - Desc : 미체결 주문 조회
