@@ -20,12 +20,10 @@ from module import upbit
 # -----------------------------------------------------------------------------
 def start_buytrade(buy_amt, except_items):
     try:
- 
         #----------------------------------------------------------------------
         # 반복 수행
         #----------------------------------------------------------------------
         while True:
- 
             logging.info("*********************************************************")
             logging.info("1. 로그레벨 : " + str(log_level))
             logging.info("2. 매수금액 : " + str(buy_amt))
@@ -202,7 +200,7 @@ if __name__ == '__main__':
         # 매수 로직 시작
         start_buytrade(buy_amt, except_items)
 
-        logging.info("result : 5.132% per year")
+        logging.info("result : -6.722% per year")
         
  
     except KeyboardInterrupt:
