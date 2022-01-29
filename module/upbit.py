@@ -93,7 +93,7 @@ def send_request(reqType, reqUrl, reqParam, reqHeader):
  
         # 요청 가능회수 확보를 위해 기다리는 시간(초)
         err_sleep_time = 0.3 #! 1 --> 0.3
- 
+    
         # 요청에 대한 응답을 받을 때까지 반복 수행
         while True:
  
